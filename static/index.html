@@ -95,20 +95,6 @@
             transform: translateY(0);
         }
 
-        #analyzeBtn {
-            background: #4CAF50;
-            color: white;
-        }
-
-        #analyzeBtn:hover {
-            background: #45a049;
-        }
-
-        #analyzeBtn:disabled {
-            background: #666;
-            cursor: not-allowed;
-            transform: none;
-        }
 
         #clearBtn {
             background: #f44336;
@@ -250,7 +236,6 @@
 
         <div id="controls">
             <div id="strokeCounter">Strokes: 0/9</div>
-            <button id="analyzeBtn" disabled>Analyze</button>
             <button id="clearBtn">Clear</button>
             <button id="backBtn">Back to Drawing</button>
         </div>
@@ -283,11 +268,14 @@
 
         // UI elements
         const strokeCounter = document.getElementById('strokeCounter');
-        const analyzeBtn = document.getElementById('analyzeBtn');
         const clearBtn = document.getElementById('clearBtn');
         const backBtn = document.getElementById('backBtn');
         const results = document.getElementById('results');
         const loading = document.getElementById('loading');
+
+        // Training configuration
+        const TRAINING_TYPE = '2point';
+        const EXPECTED_STROKES = 9;
 
         // State
         let strokes = [];
@@ -354,6 +342,11 @@
             if (currentStroke.length > 1) {
                 strokes.push([...currentStroke]);
                 updateStrokeCounter();
+
+                // Auto-analyze when we reach the expected stroke count
+                if (strokes.length === EXPECTED_STROKES) {
+                    setTimeout(analyzeDrawing, 300); // Small delay for better UX
+                }
             }
 
             currentStroke = [];
@@ -401,14 +394,12 @@
         }
 
         function updateStrokeCounter() {
-            strokeCounter.textContent = `Strokes: ${strokes.length}/9`;
+            strokeCounter.textContent = `Strokes: ${strokes.length}/${EXPECTED_STROKES}`;
 
-            if (strokes.length === 9) {
+            if (strokes.length === EXPECTED_STROKES) {
                 strokeCounter.classList.add('complete');
-                analyzeBtn.disabled = false;
             } else {
                 strokeCounter.classList.remove('complete');
-                analyzeBtn.disabled = true;
             }
         }
 
@@ -426,13 +417,12 @@
             resultImg.style.display = 'none';
             canvas.style.display = 'block';
             backBtn.style.display = 'none';
-            analyzeBtn.style.display = 'block';
             clearBtn.style.display = 'block';
             instruction.classList.remove('hidden');
         });
 
-        // Analyze button
-        analyzeBtn.addEventListener('click', async () => {
+        // Analyze drawing function
+        async function analyzeDrawing() {
             loading.style.display = 'flex';
 
             try {
@@ -444,7 +434,8 @@
                     body: JSON.stringify({
                         strokes: strokes,
                         width: canvas.width,
-                        height: canvas.height
+                        height: canvas.height,
+                        trainingType: TRAINING_TYPE
                     })
                 });
 
@@ -460,7 +451,7 @@
             } finally {
                 loading.style.display = 'none';
             }
-        });
+        }
 
         // Back button
         backBtn.addEventListener('click', () => {
@@ -469,7 +460,6 @@
             resultImg.style.display = 'none';
             canvas.style.display = 'block';
             backBtn.style.display = 'none';
-            analyzeBtn.style.display = 'block';
             clearBtn.style.display = 'block';
         });
 
@@ -498,9 +488,13 @@
             results.style.display = 'block';
 
             // Update buttons
-            analyzeBtn.style.display = 'none';
             clearBtn.style.display = 'none';
             backBtn.style.display = 'block';
+
+            // Log saved file path
+            if (result.savedFilePath) {
+                console.log('Result saved to:', result.savedFilePath);
+            }
         }
 
         function getScoreClass(score) {

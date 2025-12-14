@@ -11,12 +11,27 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
 
 	"github.com/fogleman/gg"
 )
 
 //go:embed static/*
 var staticFiles embed.FS
+
+const resultsDir = "results"
+
+// TrainingType represents different training modes
+type TrainingType string
+
+const (
+	TwoPointPerspective   TrainingType = "2point"
+	OnePointPerspective   TrainingType = "1point"
+	ThreePointPerspective TrainingType = "3point"
+)
 
 // Point represents a 2D coordinate
 type Point struct {
@@ -29,9 +44,10 @@ type Stroke []Point
 
 // AnalysisRequest contains the strokes to analyze
 type AnalysisRequest struct {
-	Strokes []Stroke `json:"strokes"`
-	Width   float64  `json:"width"`
-	Height  float64  `json:"height"`
+	Strokes      []Stroke     `json:"strokes"`
+	Width        float64      `json:"width"`
+	Height       float64      `json:"height"`
+	TrainingType TrainingType `json:"trainingType"`
 }
 
 // Line represents a line in y = mx + b form
@@ -53,14 +69,21 @@ type AnalysisResult struct {
 	ConvergenceErrorL  float64      `json:"convergenceErrorL"`
 	ConvergenceErrorR  float64      `json:"convergenceErrorR"`
 	PerspectiveScore   float64      `json:"perspectiveScore"`
+	SavedFilePath      string       `json:"savedFilePath"`
 }
 
 func main() {
+	// Create results directory if it doesn't exist
+	if err := os.MkdirAll(resultsDir, 0755); err != nil {
+		log.Fatalf("Failed to create results directory: %v", err)
+	}
+
 	http.HandleFunc("/", serveIndex)
 	http.HandleFunc("/analyze", handleAnalyze)
 
 	port := "8080"
 	fmt.Printf("Server starting on http://localhost:%s\n", port)
+	fmt.Printf("Results will be saved to: %s/\n", resultsDir)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -86,8 +109,15 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Strokes) != 9 {
-		http.Error(w, "Expected exactly 9 strokes", http.StatusBadRequest)
+	// Set default training type if not specified
+	if req.TrainingType == "" {
+		req.TrainingType = TwoPointPerspective
+	}
+
+	// Validate stroke count based on training type
+	expectedStrokes := getExpectedStrokeCount(req.TrainingType)
+	if len(req.Strokes) != expectedStrokes {
+		http.Error(w, fmt.Sprintf("Expected exactly %d strokes for %s", expectedStrokes, req.TrainingType), http.StatusBadRequest)
 		return
 	}
 
@@ -95,6 +125,19 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func getExpectedStrokeCount(trainingType TrainingType) int {
+	switch trainingType {
+	case OnePointPerspective:
+		return 8 // 4 verticals, 4 converging to center
+	case TwoPointPerspective:
+		return 9 // 3 verticals, 3 left, 3 right
+	case ThreePointPerspective:
+		return 9 // 3 to each vanishing point
+	default:
+		return 9
+	}
 }
 
 func analyzeStrokes(req AnalysisRequest) AnalysisResult {
@@ -125,7 +168,15 @@ func analyzeStrokes(req AnalysisRequest) AnalysisResult {
 	perspectiveScore := calculatePerspectiveScore(convergenceErrorL, convergenceErrorR, req.Width, req.Height)
 
 	// Step 5: Generate visualization
-	imageData := generateVisualization(req, lines, verticals, leftGroup, rightGroup, leftVP, rightVP)
+	visualizationImg := generateVisualizationImage(req, lines, verticals, leftGroup, rightGroup, leftVP, rightVP)
+
+	// Step 6: Save result to file
+	savedPath := saveResultToFile(visualizationImg, req.TrainingType, perspectiveScore)
+
+	// Step 7: Convert to base64 for response
+	var buf bytes.Buffer
+	png.Encode(&buf, visualizationImg.Image())
+	imageData := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	// Calculate average line score
 	avgScore := 0.0
@@ -143,6 +194,7 @@ func analyzeStrokes(req AnalysisRequest) AnalysisResult {
 		ConvergenceErrorL: convergenceErrorL,
 		ConvergenceErrorR: convergenceErrorR,
 		PerspectiveScore:  perspectiveScore,
+		SavedFilePath:     savedPath,
 	}
 }
 
@@ -237,22 +289,49 @@ func calculateScore(rmse float64) float64 {
 	return score
 }
 
-// clusterLines groups lines into vertical, left-converging, and right-converging
+// clusterLines groups lines into vertical, left-converging, and right-converging for 2-point perspective
 func clusterLines(lines []Line) (verticals, leftGroup, rightGroup []int) {
-	for i, line := range lines {
-		absAngle := math.Abs(line.Angle)
-
-		// Vertical: angle close to 90 or -90
-		if absAngle > 70 && absAngle < 110 {
-			verticals = append(verticals, i)
-		} else if line.Angle < 0 {
-			// Negative slope: converging to right VP
-			rightGroup = append(rightGroup, i)
-		} else {
-			// Positive slope: converging to left VP
-			leftGroup = append(leftGroup, i)
+	// Sort lines by angle to find the median angle, which is likely a perspective angle
+	sortedLines := make([]Line, 0, len(lines))
+	for _, line := range lines {
+		// Ignore purely vertical/horizontal lines for median calculation
+		if math.Abs(line.Angle) < 85 && math.Abs(line.Angle) > 5 {
+			sortedLines = append(sortedLines, line)
 		}
 	}
+	sort.Slice(sortedLines, func(i, j int) bool {
+		return sortedLines[i].Angle < sortedLines[j].Angle
+	})
+
+	// Heuristic to handle cases with too few perspective lines
+	var medianAngle float64
+	if len(sortedLines) >= 3 {
+		medianAngle = sortedLines[len(sortedLines)/2].Angle
+	} else {
+		// Fallback for less clear drawings
+		medianAngle = 30
+	}
+
+	for i, line := range lines {
+		angle := line.Angle
+		absAngle := math.Abs(angle)
+
+		// Increased strictness for vertical lines
+		if absAngle > 80 {
+			verticals = append(verticals, i)
+		} else if math.Abs(angle-medianAngle) < 25 {
+			// Lines close to the median angle (either positive or negative median would work)
+			leftGroup = append(leftGroup, i)
+		} else {
+			// The rest of the lines
+			rightGroup = append(rightGroup, i)
+		}
+	}
+	// A final check: if left is bigger, it's probably the negative slope group
+	if len(leftGroup) > len(rightGroup) {
+		leftGroup, rightGroup = rightGroup, leftGroup
+	}
+
 	return
 }
 
@@ -353,12 +432,21 @@ func calculatePerspectiveScore(errorL, errorR, width, height float64) float64 {
 	return score
 }
 
-// generateVisualization creates an overlay image showing the analysis
-func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGroup, rightGroup []int, leftVP, rightVP *Point) string {
+// generateVisualizationImage creates an overlay image showing the analysis
+func generateVisualizationImage(req AnalysisRequest, lines []Line, verticals, leftGroup, rightGroup []int, leftVP, rightVP *Point) *gg.Context {
 	width := int(req.Width)
 	height := int(req.Height)
 
 	dc := gg.NewContext(width, height)
+
+	// Draw white background
+	dc.SetColor(color.White)
+	dc.Clear()
+
+	// Set font
+	if err := dc.LoadFontFace("/System/Library/Fonts/HelveticaNeue.ttc", 14); err != nil {
+		log.Println("Could not load font, using default")
+	}
 
 	// Draw original strokes in light gray
 	dc.SetColor(color.RGBA{200, 200, 200, 255})
@@ -374,7 +462,7 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 		dc.Stroke()
 	}
 
-	// Draw ideal lines in green
+	// Draw ideal lines in green and label them
 	dc.SetColor(color.RGBA{0, 200, 0, 255})
 	dc.SetLineWidth(2)
 	for i, stroke := range req.Strokes {
@@ -386,7 +474,10 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 		// Find stroke bounds
 		minX, maxX := stroke[0].X, stroke[0].X
 		minY, maxY := stroke[0].Y, stroke[0].Y
+		sumX, sumY := 0.0, 0.0
 		for _, p := range stroke {
+			sumX += p.X
+			sumY += p.Y
 			if p.X < minX {
 				minX = p.X
 			}
@@ -410,6 +501,9 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 			dc.DrawLine(minX, y1, maxX, y2)
 		}
 		dc.Stroke()
+		// Label with angle
+		dc.SetColor(color.RGBA{0, 100, 0, 200})
+		dc.DrawString(fmt.Sprintf("%.1f°", line.Angle), sumX/float64(len(stroke))+5, sumY/float64(len(stroke)))
 	}
 
 	// Extend lines to vanishing points in red
@@ -421,8 +515,17 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 		for _, idx := range leftGroup {
 			stroke := req.Strokes[idx]
 			if len(stroke) > 0 {
-				// Draw from first point to VP
-				dc.DrawLine(stroke[0].X, stroke[0].Y, leftVP.X, leftVP.Y)
+				// Extend from the point on the stroke furthest from the VP
+				p_furthest := stroke[0]
+				maxDist := 0.0
+				for _, p := range stroke {
+					dist := math.Hypot(p.X-leftVP.X, p.Y-leftVP.Y)
+					if dist > maxDist {
+						maxDist = dist
+						p_furthest = p
+					}
+				}
+				dc.DrawLine(p_furthest.X, p_furthest.Y, leftVP.X, leftVP.Y)
 				dc.Stroke()
 			}
 		}
@@ -438,7 +541,16 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 		for _, idx := range rightGroup {
 			stroke := req.Strokes[idx]
 			if len(stroke) > 0 {
-				dc.DrawLine(stroke[0].X, stroke[0].Y, rightVP.X, rightVP.Y)
+				p_furthest := stroke[0]
+				maxDist := 0.0
+				for _, p := range stroke {
+					dist := math.Hypot(p.X-rightVP.X, p.Y-rightVP.Y)
+					if dist > maxDist {
+						maxDist = dist
+						p_furthest = p
+					}
+				}
+				dc.DrawLine(p_furthest.X, p_furthest.Y, rightVP.X, rightVP.Y)
 				dc.Stroke()
 			}
 		}
@@ -448,8 +560,28 @@ func generateVisualization(req AnalysisRequest, lines []Line, verticals, leftGro
 		dc.Fill()
 	}
 
-	// Convert to base64 PNG
-	var buf bytes.Buffer
-	png.Encode(&buf, dc.Image())
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	// Add group count stats
+	dc.SetColor(color.Black)
+	stats := fmt.Sprintf("Verticals: %d, Left Group: %d, Right Group: %d", len(verticals), len(leftGroup), len(rightGroup))
+	dc.DrawString(stats, 10, 20)
+
+	return dc
+}
+
+// saveResultToFile saves the visualization to the results directory
+func saveResultToFile(dc *gg.Context, trainingType TrainingType, score float64) string {
+	// Generate filename with timestamp and score
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	scoreStr := fmt.Sprintf("%.0f", score)
+	filename := fmt.Sprintf("%s_%s_score-%s.png", timestamp, trainingType, scoreStr)
+	filepath := filepath.Join(resultsDir, filename)
+
+	// Save the image
+	if err := dc.SavePNG(filepath); err != nil {
+		log.Printf("Failed to save result to %s: %v", filepath, err)
+		return ""
+	}
+
+	log.Printf("Saved result to: %s", filepath)
+	return filepath
 }

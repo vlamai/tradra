@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Tradra** (Perspective Trainer) is a single-binary web application for training artists in 2-point perspective drawing. Users draw cubes with 9 strokes on an HTML5 canvas, and the backend analyzes the mathematical accuracy of their perspective lines.
+**Tradra** (Perspective Trainer) is a single-binary web application for training artists in perspective drawing. The application supports multiple training types (1-point, 2-point, 3-point perspective) and automatically analyzes drawings when complete, saving results to a local `results/` directory.
 
 ## Architecture
 
@@ -27,11 +27,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Displays analyzed results: ideal lines (green), vanishing points (red), error scores
 
 ### Data Flow
-1. User draws 9 strokes on canvas (vector data, not raster)
-2. Frontend sends raw coordinate arrays to Go backend
-3. Backend performs mathematical analysis on raw coordinates
-4. Backend returns visual overlay + numeric scores
-5. Frontend displays results alongside original drawing
+1. User draws strokes on canvas (vector data, not raster)
+2. When expected stroke count is reached, analysis triggers automatically
+3. Frontend sends raw coordinate arrays + training type to Go backend
+4. Backend performs mathematical analysis on raw coordinates
+5. Backend saves result image to `results/YYYY-MM-DD_HH-MM-SS_{type}_score-{score}.png`
+6. Backend returns visual overlay + numeric scores
+7. Frontend displays results
 
 ## Development Commands
 
@@ -61,6 +63,8 @@ go test -run TestFunctionName
 - **Frontend**: Pure vanilla JavaScript, no frameworks
 - **Math precision**: Work with raw coordinate data, not pixel manipulation
 - **Distribution**: Single executable binary with embedded assets
+- **Automatic analysis**: No manual "Analyze" button - triggers when stroke count reached
+- **Result persistence**: All results saved to `results/` directory with timestamps
 
 ## Core Mathematical Components
 
