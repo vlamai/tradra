@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perspective Trainer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #2a2a2a;
+            padding: 15px 20px;
+            border-bottom: 2px solid #3a3a3a;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        main {
+            flex: 1;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #canvasContainer {
+            flex: 1;
+            position: relative;
+            background: #fff;
+        }
+
+        #drawingCanvas {
+            display: block;
+            cursor: crosshair;
+            touch-action: none;
+        }
+
+        #resultCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            display: none;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 10;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        #analyzeBtn {
+            background: #4CAF50;
+            color: white;
+        }
+
+        #analyzeBtn:hover {
+            background: #45a049;
+        }
+
+        #analyzeBtn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #clearBtn {
+            background: #f44336;
+            color: white;
+        }
+
+        #clearBtn:hover {
+            background: #da190b;
+        }
+
+        #backBtn {
+            background: #2196F3;
+            color: white;
+            display: none;
+        }
+
+        #backBtn:hover {
+            background: #0b7dda;
+        }
+
+        #strokeCounter {
+            background: rgba(42, 42, 42, 0.95);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        #strokeCounter.complete {
+            background: rgba(76, 175, 80, 0.95);
+        }
+
+        #results {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            display: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .result-item {
+            background: #333;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .result-label {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .result-value {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .result-value.good {
+            color: #4CAF50;
+        }
+
+        .result-value.medium {
+            color: #FFC107;
+        }
+
+        .result-value.poor {
+            color: #f44336;
+        }
+
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333;
+            border-top-color: #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .instruction {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #999;
+            font-size: 18px;
+            pointer-events: none;
+        }
+
+        .instruction.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Perspective Trainer</h1>
+        <div class="subtitle">Draw a cube with 9 strokes: 3 verticals, 3 left-converging, 3 right-converging</div>
+    </header>
+
+    <main>
+        <div id="canvasContainer">
+            <canvas id="drawingCanvas"></canvas>
+            <img id="resultCanvas" />
+            <div class="instruction" id="instruction">Click and drag to draw strokes</div>
+        </div>
+
+        <div id="controls">
+            <div id="strokeCounter">Strokes: 0/9</div>
+            <button id="analyzeBtn" disabled>Analyze</button>
+            <button id="clearBtn">Clear</button>
+            <button id="backBtn">Back to Drawing</button>
+        </div>
+
+        <div id="results">
+            <h2 style="margin-bottom: 10px;">Analysis Results</h2>
+            <div class="results-grid">
+                <div class="result-item">
+                    <div class="result-label">Line Confidence</div>
+                    <div class="result-value" id="lineScore">--</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">Perspective Accuracy</div>
+                    <div class="result-value" id="perspectiveScore">--</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="loading">
+        <div class="spinner"></div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const resultImg = document.getElementById('resultCanvas');
+        const instruction = document.getElementById('instruction');
+
+        // UI elements
+        const strokeCounter = document.getElementById('strokeCounter');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const backBtn = document.getElementById('backBtn');
+        const results = document.getElementById('results');
+        const loading = document.getElementById('loading');
+
+        // State
+        let strokes = [];
+        let currentStroke = [];
+        let isDrawing = false;
+        let isAnalyzed = false;
+
+        // Resize canvas to fill container
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            redraw();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Drawing functions
+        function startDrawing(e) {
+            if (isAnalyzed) return;
+
+            isDrawing = true;
+            currentStroke = [];
+
+            const rect = canvas.getBoundingClientRect();
+
+            // Use getCoalescedEvents for high precision if available
+            const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+
+            events.forEach(event => {
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                currentStroke.push({ x, y });
+            });
+
+            instruction.classList.add('hidden');
+        }
+
+        function draw(e) {
+            if (!isDrawing || isAnalyzed) return;
+
+            e.preventDefault();
+
+            const rect = canvas.getBoundingClientRect();
+
+            // Use getCoalescedEvents for high precision
+            const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+
+            events.forEach(event => {
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                currentStroke.push({ x, y });
+            });
+
+            redraw();
+        }
+
+        function stopDrawing(e) {
+            if (!isDrawing || isAnalyzed) return;
+
+            isDrawing = false;
+
+            if (currentStroke.length > 1) {
+                strokes.push([...currentStroke]);
+                updateStrokeCounter();
+            }
+
+            currentStroke = [];
+            redraw();
+        }
+
+        // Pointer events (handles mouse, touch, and stylus)
+        canvas.addEventListener('pointerdown', startDrawing);
+        canvas.addEventListener('pointermove', draw);
+        canvas.addEventListener('pointerup', stopDrawing);
+        canvas.addEventListener('pointerleave', stopDrawing);
+
+        function redraw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            // Draw completed strokes
+            strokes.forEach(stroke => {
+                if (stroke.length < 2) return;
+
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+
+                for (let i = 1; i < stroke.length; i++) {
+                    ctx.lineTo(stroke[i].x, stroke[i].y);
+                }
+
+                ctx.stroke();
+            });
+
+            // Draw current stroke
+            if (currentStroke.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(currentStroke[0].x, currentStroke[0].y);
+
+                for (let i = 1; i < currentStroke.length; i++) {
+                    ctx.lineTo(currentStroke[i].x, currentStroke[i].y);
+                }
+
+                ctx.stroke();
+            }
+        }
+
+        function updateStrokeCounter() {
+            strokeCounter.textContent = `Strokes: ${strokes.length}/9`;
+
+            if (strokes.length === 9) {
+                strokeCounter.classList.add('complete');
+                analyzeBtn.disabled = false;
+            } else {
+                strokeCounter.classList.remove('complete');
+                analyzeBtn.disabled = true;
+            }
+        }
+
+        // Clear button
+        clearBtn.addEventListener('click', () => {
+            strokes = [];
+            currentStroke = [];
+            isDrawing = false;
+            isAnalyzed = false;
+
+            redraw();
+            updateStrokeCounter();
+
+            results.style.display = 'none';
+            resultImg.style.display = 'none';
+            canvas.style.display = 'block';
+            backBtn.style.display = 'none';
+            analyzeBtn.style.display = 'block';
+            clearBtn.style.display = 'block';
+            instruction.classList.remove('hidden');
+        });
+
+        // Analyze button
+        analyzeBtn.addEventListener('click', async () => {
+            loading.style.display = 'flex';
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        strokes: strokes,
+                        width: canvas.width,
+                        height: canvas.height
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Analysis failed');
+                }
+
+                const result = await response.json();
+                displayResults(result);
+
+            } catch (error) {
+                alert('Error analyzing drawing: ' + error.message);
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        // Back button
+        backBtn.addEventListener('click', () => {
+            isAnalyzed = false;
+            results.style.display = 'none';
+            resultImg.style.display = 'none';
+            canvas.style.display = 'block';
+            backBtn.style.display = 'none';
+            analyzeBtn.style.display = 'block';
+            clearBtn.style.display = 'block';
+        });
+
+        function displayResults(result) {
+            isAnalyzed = true;
+
+            // Show result image
+            resultImg.src = result.imageData;
+            resultImg.style.display = 'block';
+            resultImg.style.width = canvas.width + 'px';
+            resultImg.style.height = canvas.height + 'px';
+            canvas.style.display = 'none';
+
+            // Update scores
+            const lineScore = Math.round(result.averageLineScore);
+            const perspScore = Math.round(result.perspectiveScore);
+
+            document.getElementById('lineScore').textContent = lineScore + '%';
+            document.getElementById('perspectiveScore').textContent = perspScore + '%';
+
+            // Apply color classes
+            document.getElementById('lineScore').className = 'result-value ' + getScoreClass(lineScore);
+            document.getElementById('perspectiveScore').className = 'result-value ' + getScoreClass(perspScore);
+
+            // Show results panel
+            results.style.display = 'block';
+
+            // Update buttons
+            analyzeBtn.style.display = 'none';
+            clearBtn.style.display = 'none';
+            backBtn.style.display = 'block';
+        }
+
+        function getScoreClass(score) {
+            if (score >= 70) return 'good';
+            if (score >= 40) return 'medium';
+            return 'poor';
+        }
+
+        // Initialize
+        updateStrokeCounter();
+    </script>
+</body>
+</html>
