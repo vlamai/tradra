@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Install dependencies
+        run: go get .
+
+      - name: Build for all platforms
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o tradra-linux-amd64 main.go
+          GOOS=windows GOARCH=amd64 go build -o tradra-windows-amd64.exe main.go
+          GOOS=darwin GOARCH=amd64 go build -o tradra-macos-amd64 main.go
+          GOOS=darwin GOARCH=arm64 go build -o tradra-macos-arm64 main.go
+
+      - name: Create Release and Upload Binaries
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            tradra-linux-amd64
+            tradra-windows-amd64.exe
+            tradra-macos-amd64
+            tradra-macos-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
